@@ -70,8 +70,8 @@ st.markdown("""
 """)
 
 eafit_location = pd.DataFrame({
-    "lat": [47.48595],
-    "lon": [4.71698],
+    "lat": [45.7640],
+    "lon": [4.8357],
     "location": ["Rio Sena"]
 })
 
