@@ -1,0 +1,222 @@
+#include <WiFi.h>
+#include <WiFiMulti.h>
+#include <PubSubClient.h>
+#include <ArduinoJson.h>
+#include <InfluxDbClient.h>
+#include <InfluxDbCloud.h>
+#include <ESP32Servo.h>
+
+// --- Configuración WiFi ---
+#define WIFI_SSID "Wokwi-GUEST"
+#define WIFI_PASSWORD ""
+WiFiMulti wifiMulti;
+
+// --- Configuración ThingsBoard ---
+#define TOKEN "4n375uy9c3je05ocezwi"
+char thingsboardServer[] = "thingsboard.cloud";
+WiFiClient espClient;
+PubSubClient mqttClient(espClient);
+
+// --- Configuración InfluxDB Cloud v2 ---
+#define INFLUXDB_URL "https://us-east-1-1.aws.cloud2.influxdata.com"
+#define INFLUXDB_TOKEN "IUGc8rPUka7TRDSXRWpL9bPOc4D32-h6nBGs1VpfkoNbl66YMIj4xoTrlyHH-_ZtIoOwkSrN-xQUqkxAN_HK1g=="
+#define INFLUXDB_ORG "saramambiche"
+#define INFLUXDB_BUCKET "final"
+#define TZ_INFO "CET-1CEST,M3.5.0,M10.5.0/3"
+
+InfluxDBClient influxClient(INFLUXDB_URL, INFLUXDB_ORG, INFLUXDB_BUCKET, INFLUXDB_TOKEN, InfluxDbCloud2CACert);
+Point sensorPoint("sistema_seguridad");
+
+// --- Definición de Pines ---
+const int PIR_PIN = 23;     // Sensor PIR (Cable Verde)
+const int GAS_PIN = 32;     // Sensor Gas (Cable Azul -> D32)
+const int LDR_PIN = 34;     // Sensor LDR (Cable Púrpura -> D34)
+const int SERVO_PIN = 18;
+Servo servoGas;
+
+bool estadoBotonGas = false; 
+bool estadoBotonLasers = false;
+unsigned long lastMsg = 0;
+
+// --- FUNCIÓN DE CONEXIÓN MQTT ---
+void reconnectMQTT() {
+  while (!mqttClient.connected()) {
+    Serial.print("Conectando a ThingsBoard MQTT...");
+    if (mqttClient.connect("ESP32_Security_System", TOKEN, NULL)) {
+      Serial.println(" ¡Conectado!");
+      // Suscripción al tópico RPC estándar de ThingsBoard
+      mqttClient.subscribe("v1/devices/me/rpc/request/+");
+    } else {
+      Serial.print(" Falló conexión, rc=");
+      Serial.print(mqttClient.state());
+      Serial.println(" Retry en 5s...");
+      delay(5000);
+    }
+  }
+}
+
+void callback(char* topic, byte* payload, unsigned int length) {
+  String response;
+  for (unsigned int i = 0; i < length; i++) {
+    response += (char)payload[i];
+  }
+
+  StaticJsonDocument<200> doc;
+  DeserializationError error = deserializeJson(doc, response);
+  if (error) return;
+
+  String method = doc["method"];
+  String value = doc["params"];
+
+  // Control para el Gas y Servo
+  if (method.equals("setGas") || method.equals("setValue")) {
+    if (value.equals("true") || value == "1") {
+      estadoBotonGas = true;
+      servoGas.write(90); // 🔓 Abre la válvula/servo a 90 grados (o 180)
+      Serial.println("-> Botón Gas: ACTIVADO | Servo: ABIERTO 🟢");
+    } else {
+      estadoBotonGas = false;
+      servoGas.write(0);  // 🔒 Cierra la válvula/servo a 0 grados
+      Serial.println("-> Botón Gas: DESACTIVADO | Servo: CERRADO 🔴");
+    }
+  }
+
+  // Control para los Láseres / Alarma
+  if (method.equals("setLasers") || method.equals("setLaser")) {
+    if (value.equals("true") || value == "1") {
+      estadoBotonLasers = true;
+      Serial.println("-> Botón Láseres: ACTIVADOS 🛡️");
+    } else {
+      estadoBotonLasers = false;
+      Serial.println("-> Botón Láseres: DESACTIVADOS 📴");
+    }
+  }
+}
+
+void setup() {
+  Serial.begin(115200);
+  
+  pinMode(PIR_PIN, INPUT);
+  pinMode(GAS_PIN, INPUT);
+  pinMode(LDR_PIN, INPUT);
+
+  WiFi.mode(WIFI_STA);
+  wifiMulti.addAP(WIFI_SSID, WIFI_PASSWORD);
+
+  Serial.print("Conectando a WiFi");
+  while (wifiMulti.run() != WL_CONNECTED) {
+    Serial.print(".");
+    delay(500);
+  }
+  Serial.println("\nWiFi Conectado");
+
+  // Configurar servidor ThingsBoard
+  mqttClient.setServer(thingsboardServer, 1883);
+  mqttClient.setCallback(callback);
+
+  // Sincronizar tiempo para InfluxDB (esencial para certificados SSL)
+  timeSync(TZ_INFO, "pool.ntp.org", "time.nis.gov");
+  
+  // Imprimir la hora actual del ESP32 para verificar que no esté en el año 1970
+  time_t nowSecs = time(nullptr);
+  Serial.print("Hora actual del ESP32 (Epoch): ");
+  Serial.println(nowSecs);
+
+  // Validar conexión con InfluxDB
+  if (influxClient.validateConnection()) {
+    Serial.print("Conectado a InfluxDB Cloud: ");
+    Serial.println(influxClient.getServerUrl());
+  } else {
+    Serial.print("Fallo conexión InfluxDB: ");
+    Serial.println(influxClient.getLastErrorMessage());
+  }
+
+  // Configuración del Servo
+  ESP32PWM::allocateTimer(0);
+  servoGas.setPeriodHertz(50);      // Frecuencia estándar a 50Hz
+  servoGas.attach(SERVO_PIN, 500, 2400); // Asignar pin y anchos de pulso (min/max)
+  servoGas.write(0);                // Iniciar cerrado (0 grados)
+
+  sensorPoint.addTag("device", "ESP32_Wokwi");
+}
+
+void loop() {
+  // Mantener MQTT de ThingsBoard conectado
+  if (!mqttClient.connected()) {
+    reconnectMQTT();
+  }
+  mqttClient.loop();
+
+  unsigned long now = millis();
+  if (now - lastMsg > 2000) {
+    lastMsg = now;
+
+    // 1. Lecturas de los sensores en Wokwi
+    int valorMovimiento = digitalRead(PIR_PIN);
+    int valorGasRaw     = analogRead(GAS_PIN);
+    int valorLdrRaw     = analogRead(LDR_PIN);
+
+    // 2. Aplicar escalas (Gas en % y Luz invertida a %)
+    int porcGas = map(valorGasRaw, 800, 4095, 0, 100);
+    porcGas = constrain(porcGas, 0, 100);
+
+    int porcLdr = map(valorLdrRaw, 0, 4095, 100, 0);
+    porcLdr = constrain(porcLdr, 0, 100);
+
+    // --- SIMULACIÓN DE ALERTA AL ACTIVAR EL BOTÓN ---
+    if (estadoBotonGas) {
+      porcGas = 100; // Forzar lectura de alerta al 100%
+    }
+
+    if (estadoBotonLasers) {
+      porcLdr = 100; // Forzar lectura de luz/láser al 100%
+    }
+
+    // Lógica de seguridad: Evaluar si hay intruso (Movimiento + Láseres activos)
+    bool alertaIntruso = (valorMovimiento == HIGH && estadoBotonLasers);
+
+    // --- ENVIAR A THINGSBOARD (MQTT) ---
+    StaticJsonDocument<200> doc;
+    doc["movimiento"] = valorMovimiento;
+    doc["gas"]        = porcGas;
+    doc["lasers"]     = porcLdr;
+    doc["gas_control_tb"] = estadoBotonGas;
+    doc["laser_control_tb"] = estadoBotonLasers;
+    doc["alerta_ladron"]    = alertaIntruso ? 1 : 0; // Mandamos la alerta a la nube
+
+    char buffer[256];
+    serializeJson(doc, buffer);
+    mqttClient.publish("v1/devices/me/telemetry", buffer);
+
+    // --- ENVIAR A INFLUXDB (HTTPS directo) ---
+    sensorPoint.clearFields();
+    sensorPoint.addField("movimiento", valorMovimiento);
+    sensorPoint.addField("gas", porcGas);
+    sensorPoint.addField("lasers", porcLdr);
+    sensorPoint.addField("gas_control_tb", estadoBotonGas ? 1 : 0);
+    sensorPoint.addField("laser_control_tb", estadoBotonLasers ? 1 : 0);
+    sensorPoint.addField("alerta_ladron", alertaIntruso ? 1 : 0);
+
+    influxClient.writePoint(sensorPoint); // Envía el punto
+
+    // --- CONSOLA VISUAL Y ELEGANTE ---
+    Serial.println("\n========================================");
+    Serial.println("         📊 TELEMETRÍA ESP32 📊         ");
+    Serial.println("========================================");
+
+    if (alertaIntruso) {
+      Serial.println(" 🚨 ¡LADRÓÓN! ¡LADRÓÓN! 🚨 (INTRUSO DETECTADO)");
+    } else {
+      Serial.print(" 🏃 Movimiento : "); Serial.println(valorMovimiento == 1 ? "Detectado (Seguro desarmado) ⚠️" : "Inactivo 💤");
+    }
+    // ... y en los estados:
+    Serial.print(" 🛡️ Control Láser: "); Serial.println(estadoBotonLasers ? "ACTIVADOS 🟢" : "DESACTIVADOS 🔴");
+    Serial.print(" 🏃 Movimiento : "); Serial.println(valorMovimiento == 1 ? "¡DETECTADO! 🚨" : "Inactivo 💤");
+    Serial.print(" 🔥 Gas Level  : "); Serial.print(porcGas); Serial.println(" %");
+    Serial.print(" 💡 Luz (LDR)  : "); Serial.print(porcLdr); Serial.println(" %");
+    Serial.print(" 🎛️ Control TB : "); Serial.println(estadoBotonGas ? "ENCENDIDO 🟢" : "APAGADO 🔴");
+    Serial.println("----------------------------------------");
+    Serial.println("🌐 [ThingsBoard] & 💾 [InfluxDB] Actualizados.");
+    Serial.println("========================================\n");
+  }
+}
