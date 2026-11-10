@@ -68,6 +68,8 @@ st.markdown("""
     Esta aplicación permite analizar datos enviados por el sistema de seguridad Lyon™ para matar a un ladron en caso de ser necesario
 """)
 
+st.image("perrito_meme")
+
 eafit_location = pd.DataFrame({
     "lat": [45.7640],
     "lon": [4.8357],
