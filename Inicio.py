@@ -19,7 +19,6 @@ st.markdown("""
     </style>
 """, unsafe_allow_html=True)
 
-# Nombres que se reconocen como columna de tiempo (sin importar mayúsculas)
 CANDIDATAS_TIEMPO = ["time", "_time", "timestamp", "fecha", "date", "datetime"]
 
 
@@ -27,11 +26,7 @@ CANDIDATAS_TIEMPO = ["time", "_time", "timestamp", "fecha", "date", "datetime"]
 # Preparación de datos
 # ============================================================
 def preparar_datos(df):
-    """Detecta la columna de tiempo y las columnas numéricas del CSV.
-
-    Devuelve el DataFrame procesado, la lista de variables numéricas
-    y el nombre original de la columna de tiempo (o None).
-    """
+    """Detecta la columna de tiempo y las columnas numéricas del CSV."""
     df = df.copy()
 
     # 1. Columna de tiempo → índice
@@ -44,7 +39,7 @@ def preparar_datos(df):
         df = df.dropna(subset=[col_tiempo]).set_index(col_tiempo).sort_index()
         df.index.name = "Time"
 
-    # 2. Columnas de texto que en realidad son números (p. ej. "23,5")
+    # 2. Convertir texto numérico
     for c in df.columns:
         if not pd.api.types.is_numeric_dtype(df[c]):
             convertida = pd.to_numeric(
@@ -54,15 +49,15 @@ def preparar_datos(df):
             if convertida.notna().mean() >= 0.9:
                 df[c] = convertida
 
-    # 3. Variables numéricas disponibles para el análisis
+    # 3. Variables numéricas disponibles
     numericas = df.select_dtypes(include="number").columns.tolist()
     return df, numericas, col_tiempo
 
 
-def normalizar(df):
-    """Escala cada columna a 0–1 para comparar variables con unidades distintas."""
-    rango = (df.max() - df.min()).replace(0, 1)
-    return (df - df.min()) / rango
+def normalizar(df_num):
+    """Escala únicamente las columnas numéricas a 0–1."""
+    rango = (df_num.max() - df_num.min()).replace(0, 1)
+    return (df_num - df_num.min()) / rango
 
 
 # ============================================================
@@ -84,20 +79,31 @@ st.subheader("📍 Ubicación de los Sensores - Universidad EAFIT")
 st.map(eafit_location, zoom=15)
 
 # ============================================================
-# Carga del archivo
+# Carga de archivo(s) CSV
 # ============================================================
-uploaded_file = st.file_uploader("Seleccione archivo CSV", type=["csv"])
+uploaded_files = st.file_uploader(
+    "Seleccione uno o varios archivos CSV", 
+    type=["csv"], 
+    accept_multiple_files=True
+)
 
-if uploaded_file is not None:
+if uploaded_files:
     try:
-        df_original = pd.read_csv(uploaded_file)
+        # Cargar y unir múltiples archivos si se sube más de uno
+        lista_dfs = []
+        for file in uploaded_files:
+            df_temp = pd.read_csv(file)
+            lista_dfs.append(df_temp)
+        
+        df_original = pd.concat(lista_dfs, ignore_index=True)
         df1, variables, col_tiempo = preparar_datos(df_original)
 
         if not variables:
-            st.error("No se encontraron columnas numéricas en el archivo.")
+            st.error("No se encontraron columnas numéricas en los archivos cargados.")
             st.stop()
 
         st.success(
+            f"Se cargaron **{len(uploaded_files)}** archivo(s) exitosamente. "
             f"Se detectaron **{len(variables)}** variable(s) numérica(s): "
             + ", ".join(f"`{v}`" for v in variables)
         )
@@ -126,35 +132,36 @@ if uploaded_file is not None:
             with col_c:
                 normalizado = st.checkbox(
                     "Normalizar escalas (0–1)",
-                    help="Escala todas las variables al rango 0-1 para compararlas juntas."
+                    help="Escala las variables seleccionadas al rango 0-1 para compararlas juntas."
                 )
 
             if not vars_graf:
-                st.warning("Seleccione al menos una variable.")
+                st.warning("Seleccione al menos una variable del menú desplegable.")
             else:
-                # Preparamos el DataFrame para Plotly (reseteando índice para usarlo como Eje X)
-                df_plot = df1[vars_graf].reset_index()
-                eje_x = df_plot.columns[0] # Time o índice
+                # Tomar los datos seleccionados
+                df_sub = df1[vars_graf].copy()
 
                 if normalizado:
-                    datos_norm = normalizar(df1[vars_graf])
-                    datos_norm[eje_x] = df1.index
-                    df_plot = datos_norm.reset_index() if col_tiempo is not None else datos_norm
+                    df_sub = normalizar(df_sub)
 
-                # Construcción del gráfico interactivo con Plotly
+                # Construir el gráfico con Plotly
                 fig = go.Figure()
+
+                # Definir eje X (el índice de tiempo o rango numérico)
+                eje_x = df_sub.index
+
                 for var in vars_graf:
                     if chart_type == "Líneas":
-                        fig.add_trace(go.Scatter(x=df_plot[eje_x], y=df_plot[var], mode='lines', name=var))
+                        fig.add_trace(go.Scatter(x=eje_x, y=df_sub[var], mode='lines', name=var))
                     elif chart_type == "Áreas":
-                        fig.add_trace(go.Scatter(x=df_plot[eje_x], y=df_plot[var], mode='lines', name=var, stackgroup='one'))
+                        fig.add_trace(go.Scatter(x=eje_x, y=df_sub[var], mode='lines', name=var, stackgroup='one'))
                     else:
-                        fig.add_trace(go.Scatter(x=df_plot[eje_x], y=df_plot[var], mode='markers', name=var))
+                        fig.add_trace(go.Scatter(x=eje_x, y=df_sub[var], mode='markers', name=var))
 
                 fig.update_layout(
-                    title="Comparación Multivariable en el Tiempo",
-                    xaxis_title="Tiempo / Registro",
-                    yaxis_title="Valor normalizado" if normalizado else "Valor de la variable",
+                    title="Comparación Multivariable de Sensores",
+                    xaxis_title="Tiempo" if col_tiempo else "Registro N°",
+                    yaxis_title="Escala Normalizada (0–1)" if normalizado else "Valor de la variable",
                     hovermode="x unified",
                     height=500
                 )
@@ -183,22 +190,17 @@ if uploaded_file is not None:
             m4.metric("Desv. estándar", f"{serie.std():.2f}")
 
             if len(variables) >= 2:
-                st.write("#### Matriz de Correlación Cruzada")
+                st.write("#### Matriz de Correlación Cruzada entre Sensores")
                 corr_matrix = df1[variables].corr().round(2)
                 
-                # Gráfico de calor (Heatmap) interactivo de correlación
                 fig_corr = px.imshow(
                     corr_matrix, 
                     text_auto=True, 
                     color_continuous_scale="RdBu_r", 
                     zmin=-1, zmax=1,
-                    title="Mapa de Calor de Correlación entre Sensores"
+                    title="Mapa de Calor de Correlación"
                 )
                 st.plotly_chart(fig_corr, use_container_width=True)
-                st.caption(
-                    "Valores cercanos a 1 o −1 indican una relación fuerte; "
-                    "cercanos a 0, poca relación entre los sensores."
-                )
 
         # ----------------------------------------------------
         # TAB 3 · Filtros
@@ -212,7 +214,6 @@ if uploaded_file is not None:
 
             if min_value == max_value:
                 st.warning(f"⚠️ Todos los valores de `{var_filtro}` son iguales: {min_value:.2f}")
-                st.info("No es posible aplicar filtros cuando no hay variación en los datos.")
                 st.dataframe(df1)
             else:
                 rango = st.slider(
@@ -224,10 +225,7 @@ if uploaded_file is not None:
                 )
 
                 filtrado = df1[df1[var_filtro].between(rango[0], rango[1])]
-                st.write(
-                    f"**{len(filtrado)}** de {len(df1)} registros con `{var_filtro}` "
-                    f"entre {rango[0]:.2f} y {rango[1]:.2f}:"
-                )
+                st.write(f"**{len(filtrado)}** de {len(df1)} registros filtrados:")
                 st.dataframe(filtrado)
 
                 st.download_button(
@@ -244,19 +242,18 @@ if uploaded_file is not None:
             st.subheader("Información del Sitio de Medición")
 
             col1, col2 = st.columns(2)
-
             with col1:
                 st.write("### Ubicación del Sensor")
                 st.write("**Universidad EAFIT**")
                 st.write("- Latitud: 6.2006")
                 st.write("- Longitud: -75.5783")
-                st.write("- Altitud: ~1,495 metros sobre el nivel del mar")
+                st.write("- Altitud: ~1,495 msnm")
 
             with col2:
                 st.write("### Detalles del Sensor")
                 st.write("- Tipo: ESP32")
                 st.write("- Variables medidas: " + ", ".join(variables))
-                st.write(f"- Número de registros: {len(df1)}")
+                st.write(f"- Número total de registros: {len(df1)}")
                 if col_tiempo is not None and len(df1) > 0:
                     st.write(f"- Desde: {df1.index.min():%Y-%m-%d %H:%M}")
                     st.write(f"- Hasta: {df1.index.max():%Y-%m-%d %H:%M}")
@@ -266,7 +263,7 @@ if uploaded_file is not None:
         st.error(f"Error al procesar el archivo: {str(e)}")
         st.info("Asegúrese de que el archivo CSV tenga al menos una columna numérica.")
 else:
-    st.warning("Por favor, cargue un archivo CSV para comenzar el análisis.")
+    st.warning("Por favor, cargue uno o varios archivos CSV para comenzar el análisis.")
 
 # ============================================================
 # Pie de página
