@@ -7,8 +7,8 @@ import plotly.graph_objects as go
 # Configuración de la página
 # ============================================================
 st.set_page_config(
-    page_title="Análisis de Sensores - Mi Ciudad",
-    page_icon="📊",
+    page_title="Datos de seguridad del banco de Lyon",
+    page_icon="🏦",
     layout="wide"
 )
 
@@ -63,10 +63,9 @@ def normalizar(df_num):
 # ============================================================
 # Encabezado y mapa
 # ============================================================
-st.title("📊 Análisis de datos de Sensores en Mi Ciudad")
+st.title("🏦 Análisis de seguridad para que no se meta un ladrooooon, o si se metio al menos saber")
 st.markdown("""
-    Esta aplicación permite analizar datos de sensores
-    recolectados en diferentes puntos de la ciudad.
+    Esta aplicación permite analizar datos enviados por el sistema de seguridad Lyon™ para matar a un ladron en caso de ser necesario
 """)
 
 eafit_location = pd.DataFrame({
@@ -75,7 +74,7 @@ eafit_location = pd.DataFrame({
     "location": ["Lyon - Francia"]
 })
 
-st.subheader("📍 Ubicación de los Sensores - Lyon")
+st.subheader("📍 Ubicación del sistema - Lyon")
 st.map(eafit_location, zoom=15)
 
 # ============================================================
@@ -244,7 +243,7 @@ if uploaded_files:
             col1, col2 = st.columns(2)
             with col1:
                 st.write("### Ubicación del Sensor")
-                st.write("**Universidad EAFIT**")
+                st.write("**Lyon, Francia**")
                 st.write("- Latitud: 6.2006")
                 st.write("- Longitud: -75.5783")
                 st.write("- Altitud: ~1,495 msnm")
@@ -257,7 +256,7 @@ if uploaded_files:
                 if col_tiempo is not None and len(df1) > 0:
                     st.write(f"- Desde: {df1.index.min():%Y-%m-%d %H:%M}")
                     st.write(f"- Hasta: {df1.index.max():%Y-%m-%d %H:%M}")
-                st.write("- Ubicación: Campus universitario")
+                st.write("- Ubicación: banco de Lyon")
 
     except Exception as e:
         st.error(f"Error al procesar el archivo: {str(e)}")
@@ -270,6 +269,6 @@ else:
 # ============================================================
 st.markdown("""
     ---
-    Desarrollado para el análisis de datos de sensores urbanos.
-    Ubicación: Universidad EAFIT, Medellín, Colombia
+    Desarrollado para el análisis de datos de seguridad para bancos.
+    Ubicación: Lyon, Francia
 """)
