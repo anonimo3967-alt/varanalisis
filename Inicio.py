@@ -1,8 +1,10 @@
 import pandas as pd
 import streamlit as st
+import plotly.express as px
+import plotly.graph_objects as go
 
 # ============================================================
-#  Configuración de la página
+# Configuración de la página
 # ============================================================
 st.set_page_config(
     page_title="Análisis de Sensores - Mi Ciudad",
@@ -22,7 +24,7 @@ CANDIDATAS_TIEMPO = ["time", "_time", "timestamp", "fecha", "date", "datetime"]
 
 
 # ============================================================
-#  Preparación de datos
+# Preparación de datos
 # ============================================================
 def preparar_datos(df):
     """Detecta la columna de tiempo y las columnas numéricas del CSV.
@@ -44,7 +46,6 @@ def preparar_datos(df):
 
     # 2. Columnas de texto que en realidad son números (p. ej. "23,5")
     for c in df.columns:
-        # (pandas 3 usa StringDtype para texto, por eso no basta con dtype == object)
         if not pd.api.types.is_numeric_dtype(df[c]):
             convertida = pd.to_numeric(
                 df[c].astype(str).str.replace(",", ".", regex=False),
@@ -65,7 +66,7 @@ def normalizar(df):
 
 
 # ============================================================
-#  Encabezado y mapa
+# Encabezado y mapa
 # ============================================================
 st.title("📊 Análisis de datos de Sensores en Mi Ciudad")
 st.markdown("""
@@ -83,7 +84,7 @@ st.subheader("📍 Ubicación de los Sensores - Universidad EAFIT")
 st.map(eafit_location, zoom=15)
 
 # ============================================================
-#  Carga del archivo
+# Carga del archivo
 # ============================================================
 uploaded_file = st.file_uploader("Seleccione archivo CSV", type=["csv"])
 
@@ -101,61 +102,77 @@ if uploaded_file is not None:
             + ", ".join(f"`{v}`" for v in variables)
         )
         if col_tiempo is None:
-            st.info("No se encontró columna de tiempo; se usará el número de registro como eje X.")
+            st.info("No se encontró columna de tiempo; se usará el índice de registros como eje X.")
 
         tab1, tab2, tab3, tab4 = st.tabs(
-            ["📈 Visualización", "📊 Estadísticas", "🔍 Filtros", "🗺️ Información del Sitio"]
+            ["📈 Visualización Multivariable", "📊 Estadísticas y Correlación", "🔍 Filtros", "🗺️ Información del Sitio"]
         )
 
         # ----------------------------------------------------
-        #  TAB 1 · Visualización
+        # TAB 1 · Visualización Multivariable
         # ----------------------------------------------------
         with tab1:
-            st.subheader("Visualización de Datos")
+            st.subheader("Visualización Avanzada de Múltiples Sensores")
 
-            col_a, col_b = st.columns([3, 1])
+            col_a, col_b, col_c = st.columns([2, 1, 1])
             with col_a:
                 vars_graf = st.multiselect(
-                    "Variables a graficar",
+                    "Variables a graficar simultáneamente",
                     variables,
-                    default=variables if len(variables) <= 4 else variables[:2]
+                    default=variables if len(variables) <= 4 else variables[:3]
                 )
             with col_b:
-                chart_type = st.selectbox("Tipo de gráfico", ["Línea", "Área", "Barra"])
-
-            normalizado = st.checkbox(
-                "Normalizar escalas (0–1)",
-                help="Útil para comparar variables con unidades distintas, "
-                     "por ejemplo temperatura (°C) y humedad (%)."
-            )
+                chart_type = st.selectbox("Tipo de gráfico", ["Líneas", "Áreas", "Dispersión (Scatter)"])
+            with col_c:
+                normalizado = st.checkbox(
+                    "Normalizar escalas (0–1)",
+                    help="Escala todas las variables al rango 0-1 para compararlas juntas."
+                )
 
             if not vars_graf:
                 st.warning("Seleccione al menos una variable.")
             else:
-                datos_graf = df1[vars_graf]
-                if normalizado:
-                    datos_graf = normalizar(datos_graf)
+                # Preparamos el DataFrame para Plotly (reseteando índice para usarlo como Eje X)
+                df_plot = df1[vars_graf].reset_index()
+                eje_x = df_plot.columns[0] # Time o índice
 
-                if chart_type == "Línea":
-                    st.line_chart(datos_graf)
-                elif chart_type == "Área":
-                    st.area_chart(datos_graf)
-                else:
-                    st.bar_chart(datos_graf)
+                if normalizado:
+                    datos_norm = normalizar(df1[vars_graf])
+                    datos_norm[eje_x] = df1.index
+                    df_plot = datos_norm.reset_index() if col_tiempo is not None else datos_norm
+
+                # Construcción del gráfico interactivo con Plotly
+                fig = go.Figure()
+                for var in vars_graf:
+                    if chart_type == "Líneas":
+                        fig.add_trace(go.Scatter(x=df_plot[eje_x], y=df_plot[var], mode='lines', name=var))
+                    elif chart_type == "Áreas":
+                        fig.add_trace(go.Scatter(x=df_plot[eje_x], y=df_plot[var], mode='lines', name=var, stackgroup='one'))
+                    else:
+                        fig.add_trace(go.Scatter(x=df_plot[eje_x], y=df_plot[var], mode='markers', name=var))
+
+                fig.update_layout(
+                    title="Comparación Multivariable en el Tiempo",
+                    xaxis_title="Tiempo / Registro",
+                    yaxis_title="Valor normalizado" if normalizado else "Valor de la variable",
+                    hovermode="x unified",
+                    height=500
+                )
+                st.plotly_chart(fig, use_container_width=True)
 
             if st.checkbox("Mostrar datos crudos"):
                 st.dataframe(df1)
 
         # ----------------------------------------------------
-        #  TAB 2 · Estadísticas
+        # TAB 2 · Estadísticas
         # ----------------------------------------------------
         with tab2:
-            st.subheader("Análisis Estadístico")
+            st.subheader("Análisis Estadístico y Multivariable")
 
             st.write("#### Resumen de todas las variables")
             st.dataframe(df1[variables].describe().T.round(2))
 
-            st.write("#### Detalle por variable")
+            st.write("#### Detalle por variable individual")
             var_stats = st.selectbox("Variable", variables, key="var_stats")
             serie = df1[var_stats].dropna()
 
@@ -166,15 +183,25 @@ if uploaded_file is not None:
             m4.metric("Desv. estándar", f"{serie.std():.2f}")
 
             if len(variables) >= 2:
-                st.write("#### Correlación entre variables")
-                st.dataframe(df1[variables].corr().round(2))
+                st.write("#### Matriz de Correlación Cruzada")
+                corr_matrix = df1[variables].corr().round(2)
+                
+                # Gráfico de calor (Heatmap) interactivo de correlación
+                fig_corr = px.imshow(
+                    corr_matrix, 
+                    text_auto=True, 
+                    color_continuous_scale="RdBu_r", 
+                    zmin=-1, zmax=1,
+                    title="Mapa de Calor de Correlación entre Sensores"
+                )
+                st.plotly_chart(fig_corr, use_container_width=True)
                 st.caption(
-                    "Valores cercanos a 1 o −1 indican una relación lineal fuerte; "
-                    "cercanos a 0, poca relación."
+                    "Valores cercanos a 1 o −1 indican una relación fuerte; "
+                    "cercanos a 0, poca relación entre los sensores."
                 )
 
         # ----------------------------------------------------
-        #  TAB 3 · Filtros
+        # TAB 3 · Filtros
         # ----------------------------------------------------
         with tab3:
             st.subheader("Filtros de Datos")
@@ -211,7 +238,7 @@ if uploaded_file is not None:
                 )
 
         # ----------------------------------------------------
-        #  TAB 4 · Información del sitio
+        # TAB 4 · Información del sitio
         # ----------------------------------------------------
         with tab4:
             st.subheader("Información del Sitio de Medición")
@@ -242,7 +269,7 @@ else:
     st.warning("Por favor, cargue un archivo CSV para comenzar el análisis.")
 
 # ============================================================
-#  Pie de página
+# Pie de página
 # ============================================================
 st.markdown("""
     ---
