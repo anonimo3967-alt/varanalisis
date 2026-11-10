@@ -70,9 +70,9 @@ st.markdown("""
 """)
 
 eafit_location = pd.DataFrame({
-    "lat": [6.2006],
-    "lon": [-75.5783],
-    "location": ["Universidad EAFIT"]
+    "lat": [47.48595],
+    "lon": [4.71698],
+    "location": ["Rio Sena"]
 })
 
 st.subheader("📍 Ubicación de los Sensores - Universidad EAFIT")
